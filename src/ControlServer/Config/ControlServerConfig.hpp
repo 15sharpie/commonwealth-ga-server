@@ -240,6 +240,8 @@ struct ControlServerConfig {
     bool        wine_debug         = false;  // --wine-debug CLI flag: uses winedbg --command cont
     bool        clear_logs         = false;  // truncate per-channel files at boot for repeated tests
     bool        show_game_console  = false;  // Windows native debug: show spawned game commandlet consoles
+    bool        dump_map_data      = false;  // -dumpmapdata=1 on every spawned map (MapDataDumper::DumpAll)
+    bool        dump_kismet        = false;  // -dumpkismet=1 on every spawned map (KismetWebDump json in the instance log dir)
     bool        allow_duplicate_account_logins = false;
     // Per-instance stats recording toggles, forwarded to game instances in
     // INSTANCE_HELLO_ACK. device_stats = the server-side mirror of the

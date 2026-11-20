@@ -377,6 +377,8 @@ pid_t InstanceSpawner::Spawn(const ControlServerConfig& cfg, const SpawnRequest&
         enabled_channels_arg, enabled_crash_channels_arg, nativewindows_arg,
     };
     if (!difficulty_arg.empty()) args.push_back(difficulty_arg);
+    if (cfg.dump_map_data) args.push_back("-dumpmapdata=1");
+    if (cfg.dump_kismet)   args.push_back("-dumpkismet=1");
 
     std::string command_line = JoinWindowsCommandLine(args);
     std::string work_dir = DirnameWindows(game_binary_path);
@@ -571,6 +573,8 @@ pid_t InstanceSpawner::Spawn(const ControlServerConfig& cfg, const SpawnRequest&
         if (!difficulty_arg.empty()) {
             inner_argv.push_back(difficulty_arg.c_str());
         }
+        if (cfg.dump_map_data) inner_argv.push_back("-dumpmapdata=1");
+        if (cfg.dump_kismet)   inner_argv.push_back("-dumpkismet=1");
 
         // ---- Drop every inherited descriptor before exec.
         //

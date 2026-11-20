@@ -155,6 +155,8 @@ ControlServerConfig ControlServerConfig::Load(const std::string& path) {
     if (j.contains("fix_package_guids"))  cfg.fix_package_guids  = j["fix_package_guids"].get<bool>();
     if (j.contains("clear_logs"))         cfg.clear_logs         = j["clear_logs"].get<bool>();
     if (j.contains("show_game_console"))  cfg.show_game_console  = j["show_game_console"].get<bool>();
+    if (j.contains("dump_map_data"))      cfg.dump_map_data      = j["dump_map_data"].get<bool>();
+    if (j.contains("dump_kismet"))        cfg.dump_kismet        = j["dump_kismet"].get<bool>();
     if (j.contains("allow_duplicate_account_logins"))
         cfg.allow_duplicate_account_logins = j["allow_duplicate_account_logins"].get<bool>();
     if (j.contains("device_stats_enabled"))
