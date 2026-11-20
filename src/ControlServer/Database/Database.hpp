@@ -27,7 +27,25 @@ public:
     static std::string GetQuestStatus(int64_t character_id, int quest_id);
     static void AcceptQuest(int64_t character_id, int quest_id);
     static void CompleteQuest(int64_t character_id, int quest_id);
+    // Also drops the quest's Kill / Interact counters, so a re-accept starts at 0.
     static void AbandonQuest(int64_t character_id, int quest_id);
+    // A completed repeatable taken again: back to 'active', counters cleared.
+    static void RestartQuest(int64_t character_id, int quest_id);
+    // completed_at of the character's row, 0 when absent or never completed.
+    static int64_t GetQuestCompletedAt(int64_t character_id, int quest_id);
+
+    static constexpr int kQuestTypeTurninOnly    = 1426;  // no accept step; hand in directly
+    static constexpr int kQuestCooldownNone      = 1630;
+    static constexpr int kQuestCooldownDaily     = 1631;
+    static constexpr int kQuestCooldownWeekly    = 1632;
+
+    // asm_data_set_quests columns that decide how a quest is taken and retaken.
+    struct QuestRepeatRule {
+        bool turnin_only = false;
+        bool repeatable = false;
+        int  cooldown_type_value_id = 0;   // 0 (unset) behaves as kQuestCooldownNone
+    };
+    static QuestRepeatRule GetQuestRepeatRule(int quest_id);
 
     // One requirement counter that moved as a result of a credit event.
     struct QuestProgress {

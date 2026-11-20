@@ -164,6 +164,7 @@ SOURCE_FILES= \
 			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/FullHeal/FullHeal.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/SetSpawnTable/SetSpawnTable.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/SetItemCount/SetItemCount.cpp \
+			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/QuestKismet/QuestKismet.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/ToggleBrokenSuits/ToggleBrokenSuits.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/ToggleCheatMode/ToggleCheatMode.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/Markers/Markers.cpp \

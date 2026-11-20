@@ -120,6 +120,22 @@ void Database::Init() {
 	// NOTE: PlayerSessionStore::Init() is called separately from main.cpp -- not here.
 }
 
+// Kill / Interact counters for one quest. Collect progress is component stock,
+// which lives in the inventory and is left alone.
+static void ClearQuestProgress(sqlite3* db, int64_t character_id, int quest_id) {
+	sqlite3_stmt* stmt = nullptr;
+	if (sqlite3_prepare_v2(db,
+			"DELETE FROM ga_character_quest_progress WHERE character_id = ? AND quest_id = ?",
+			-1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+		Logger::Log("db", "[Quest] ClearQuestProgress prepare failed: %s\n", sqlite3_errmsg(db));
+		return;
+	}
+	sqlite3_bind_int64(stmt, 1, character_id);
+	sqlite3_bind_int(stmt, 2, quest_id);
+	sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+}
+
 std::string Database::GetQuestStatus(int64_t character_id, int quest_id) {
 	sqlite3* db = GetConnection();
 	sqlite3_stmt* stmt = nullptr;
@@ -191,7 +207,68 @@ void Database::AbandonQuest(int64_t character_id, int quest_id) {
 	sqlite3_bind_int(stmt, 2, quest_id);
 	sqlite3_step(stmt);
 	sqlite3_finalize(stmt);
+	ClearQuestProgress(db, character_id, quest_id);
 	Logger::Log("db", "[Quest] Abandoned quest %d for character %lld\n", quest_id, character_id);
+}
+
+void Database::RestartQuest(int64_t character_id, int quest_id) {
+	sqlite3* db = GetConnection();
+	sqlite3_stmt* stmt = nullptr;
+	int rc = sqlite3_prepare_v2(db,
+		"UPDATE ga_character_quests SET status = 'active', "
+		"  accepted_at = strftime('%s','now'), completed_at = NULL "
+		"WHERE character_id = ? AND quest_id = ?",
+		-1, &stmt, nullptr);
+	if (rc != SQLITE_OK || !stmt) {
+		Logger::Log("db", "[Quest] RestartQuest prepare failed: %s\n", sqlite3_errmsg(db));
+		return;
+	}
+	sqlite3_bind_int64(stmt, 1, character_id);
+	sqlite3_bind_int(stmt, 2, quest_id);
+	sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+	ClearQuestProgress(db, character_id, quest_id);
+	Logger::Log("db", "[Quest] Restarted repeatable quest %d for character %lld\n", quest_id, character_id);
+}
+
+int64_t Database::GetQuestCompletedAt(int64_t character_id, int quest_id) {
+	sqlite3* db = GetConnection();
+	sqlite3_stmt* stmt = nullptr;
+	if (sqlite3_prepare_v2(db,
+			"SELECT COALESCE(completed_at, 0) FROM ga_character_quests "
+			"WHERE character_id = ? AND quest_id = ?",
+			-1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+		Logger::Log("db", "[Quest] GetQuestCompletedAt prepare failed: %s\n", sqlite3_errmsg(db));
+		return 0;
+	}
+	sqlite3_bind_int64(stmt, 1, character_id);
+	sqlite3_bind_int(stmt, 2, quest_id);
+	int64_t completed_at = 0;
+	if (sqlite3_step(stmt) == SQLITE_ROW) completed_at = sqlite3_column_int64(stmt, 0);
+	sqlite3_finalize(stmt);
+	return completed_at;
+}
+
+Database::QuestRepeatRule Database::GetQuestRepeatRule(int quest_id) {
+	QuestRepeatRule rule;
+	sqlite3* db = GetConnection();
+	sqlite3_stmt* stmt = nullptr;
+	if (sqlite3_prepare_v2(db,
+			"SELECT COALESCE(quest_type_value_id, 0), COALESCE(repeatable_flag, 0), "
+			"       COALESCE(repeatable_cooldown_type_value_id, 0) "
+			"FROM asm_data_set_quests WHERE quest_id = ?",
+			-1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+		Logger::Log("db", "[Quest] GetQuestRepeatRule prepare failed: %s\n", sqlite3_errmsg(db));
+		return rule;
+	}
+	sqlite3_bind_int(stmt, 1, quest_id);
+	if (sqlite3_step(stmt) == SQLITE_ROW) {
+		rule.turnin_only            = sqlite3_column_int(stmt, 0) == kQuestTypeTurninOnly;
+		rule.repeatable             = sqlite3_column_int(stmt, 1) != 0;
+		rule.cooldown_type_value_id = sqlite3_column_int(stmt, 2);
+	}
+	sqlite3_finalize(stmt);
+	return rule;
 }
 
 // Kill (1428) and Interact with Volume (1431) both keep their progress in

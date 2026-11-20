@@ -946,7 +946,8 @@ int main(int argc, char* argv[]) {
     // omega volume targets a zone with no live instance. The one-instance-per-
     // map guarantee lives in OpenWorldTravel — this just does the spawn.
     // queue_id stays 0: these maps are never matchmade.
-    OpenWorldTravel::SetSpawner([&cfg](const std::string& map_name,
+    // Shared by open-world zones and tutorials: one fresh, non-home instance.
+    auto spawn_volume_map = [&cfg](const std::string& map_name,
                                        const std::string& game_mode,
                                        uint32_t difficulty_value_id) -> int64_t {
         auto port = NodeControl::AllocatePort(cfg);
@@ -980,7 +981,9 @@ int main(int argc, char* argv[]) {
             "[OpenWorldSpawner] Spawned '%s' instance_id=%lld pid=%d port=%d difficulty=%u\n",
             map_name.c_str(), (long long)instance_id, (int)pid, (int)*port, difficulty_value_id);
         return instance_id;
-    });
+    };
+    OpenWorldTravel::SetSpawner(spawn_volume_map);
+    TcpSession::SetTutorialSpawner(spawn_volume_map);
 
     // Home map spawns on demand when the first player selects a character.
     TcpSession::SetHomeMapSpawner([&cfg]() {

@@ -37,6 +37,19 @@ void __fastcall TgPawn__CheckKillQuestCredit::Call(ATgPawn* Pawn, void* edx, ATg
 	const int botId = Pawn->r_nProfileId;
 	if (botId <= 0) return;
 
+	// Players who last damaged the bot (TrackStats keeps both resolved to the
+	// player). The control server uses them to narrow task-force credit in open
+	// zones, where every player shares one task force.
+	nlohmann::json participants = nlohmann::json::array();
+	for (ATgPawn* Damager : { Pawn->m_LastDamager, Pawn->m_SecondToLastDamager }) {
+		if (Damager == nullptr) continue;
+		for (auto& kv : GClientConnectionsData) {
+			if (kv.second.bClosed || (ATgPawn*)kv.second.Pawn != Damager) continue;
+			if (!kv.second.SessionGuid.empty()) participants.push_back(kv.second.SessionGuid);
+			break;
+		}
+	}
+
 	int credited = 0;
 	for (auto& kv : GClientConnectionsData) {
 		if (kv.second.bClosed) continue;
@@ -60,6 +73,7 @@ void __fastcall TgPawn__CheckKillQuestCredit::Call(ATgPawn* Pawn, void* edx, ATg
 		ev["session_guid"] = kv.second.SessionGuid;
 		ev["character_id"] = characterId;
 		ev["bot_id"]       = botId;
+		ev["participants"] = participants;
 		// Lets the control server push an inventory refresh after a loot grant.
 		ev["pawn_id"]      = (int)PlayerPawn->r_nPawnId;
 		IpcClient::Send(ev.dump());
@@ -67,6 +81,6 @@ void __fastcall TgPawn__CheckKillQuestCredit::Call(ATgPawn* Pawn, void* edx, ATg
 	}
 
 	Logger::Log("quest",
-		"CheckKillQuestCredit: bot=%d died to taskforce=%p — credited %d player(s)\n",
-		botId, tf, credited);
+		"CheckKillQuestCredit: bot=%d died to taskforce=%p — reported %d player(s), %zu damager(s)\n",
+		botId, tf, credited, participants.size());
 }

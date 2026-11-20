@@ -22,6 +22,7 @@
 #include "src/GameServer/TgGame/TgPlayerActions/FxBrowse/FxBrowse.hpp"
 #include "src/GameServer/TgGame/TgPlayerActions/SetSpawnTable/SetSpawnTable.hpp"
 #include "src/GameServer/TgGame/TgPlayerActions/SetItemCount/SetItemCount.hpp"
+#include "src/GameServer/TgGame/TgPlayerActions/QuestKismet/QuestKismet.hpp"
 #include "src/GameServer/Storage/ClientConnectionsData/ClientConnectionsData.hpp"
 #include "src/GameServer/Storage/UserPreferences/UserPreferences.hpp"
 #include "src/GameServer/Combat/MissionAlerts/SendAlert.hpp"
@@ -715,6 +716,15 @@ void IpcClient::DrainInbound() {
                     total = j["args"].value("total", 0);
                 }
                 TgPlayerActions::SetItemCountCmd::Execute(guid, total);
+            } else if (action == "quest_kismet") {
+                // Sent once the control server has accepted or completed a quest.
+                int quest_id = 0;
+                int output_link = -1;
+                if (j.contains("args") && j["args"].is_object()) {
+                    quest_id    = j["args"].value("quest_id", 0);
+                    output_link = j["args"].value("output_link", -1);
+                }
+                TgPlayerActions::QuestKismetCmd::Execute(guid, quest_id, output_link);
             } else if (action == "set_spawn_table") {
                 int map_object_id = 0;
                 int spawn_table_id = 0;

@@ -206,6 +206,11 @@ private:
     // Static callback to spawn a home map instance on demand.
     static std::function<void()> on_need_home_map_;
 
+    // Starts one tutorial instance (map, game class, difficulty value id) and
+    // returns its instance_id, 0 on failure. Set from main.
+    using TutorialSpawnFn = std::function<int64_t(const std::string&, const std::string&, uint32_t)>;
+    static TutorialSpawnFn s_tutorial_spawner_;
+
     // Network config: external IP and chat port, set once from main.
     // skal - NAT support
     static std::string s_host_;
@@ -235,6 +240,14 @@ public:
     static bool Init(asio::io_context& io, const ControlServerConfig& cfg);
 
     static void SetHomeMapSpawner(std::function<void()> cb);
+    static void SetTutorialSpawner(TutorialSpawnFn fn);
+
+    // Tutorial maps (CookedPC/Maps/_IntroMissions). New characters who choose
+    // Play start in the first; the rest are reached from inside it.
+    static constexpr const char* kTutorialMapName  = "Inception_ALL";
+    static constexpr const char* kTutorialGameMode = "TgGame.TgGame_Mission";
+    static constexpr uint32_t    kTutorialDifficultyValueId = 1028;  // same as Config::GetDifficulty for these maps
+    static constexpr int         kTutorialTaskForce = 1;
 
     // Live-kick every TcpSession whose user_id / IP matches the predicate.
     // Sends a bogus GSC_GO_PLAY pointing at a non-existent map; client tears
@@ -663,6 +676,14 @@ private:
     void travel_to_map_when_ready(const std::string& map_name, int task_force,
                                   int remaining_seconds);
     bool travel_in_flight_ = false;
+
+    // New character chose Play: spawn a private tutorial instance and send the
+    // player there once it is READY. Falls back to the home map on any failure.
+    void start_tutorial(uint32_t training_map_game_id);
+    void travel_to_instance_when_ready(int64_t instance_id, int task_force, int remaining_seconds);
+    // The id the client sent for the tutorial map; used on GSC_GO_PLAY while
+    // map_game_info has no row for it.
+    uint32_t tutorial_map_game_id_ = 0;
 
     void route_from_mission_instance(int64_t parent_instance_id, const char* reason);
 

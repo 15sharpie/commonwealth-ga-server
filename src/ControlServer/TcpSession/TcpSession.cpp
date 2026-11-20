@@ -211,6 +211,7 @@ std::map<int64_t, int64_t> TcpSession::pending_alliance_invites_;
 std::mutex TcpSession::pending_agency_mutex_;
 std::map<int64_t, int64_t> TcpSession::pending_agency_invites_;
 std::function<void()> TcpSession::on_need_home_map_;
+TcpSession::TutorialSpawnFn TcpSession::s_tutorial_spawner_;
 std::string TcpSession::s_host_ = "127.0.0.1";
 std::forward_list<TcpSession::net_info_t> TcpSession::s_nat_info_list;
 uint16_t    TcpSession::s_chat_port_ = 9001;
@@ -473,6 +474,10 @@ void TcpSession::SetHomeMapSpawner(std::function<void()> cb) {
     on_need_home_map_ = std::move(cb);
 }
 
+void TcpSession::SetTutorialSpawner(TutorialSpawnFn fn) {
+    s_tutorial_spawner_ = std::move(fn);
+}
+
 void TcpSession::EnsureHomeMapWarm(const char* reason) {
     if (!on_need_home_map_) return;
     auto home = InstanceRegistry::GetHomeInstance();
@@ -727,6 +732,28 @@ int TcpSession::EvictStaleSession(const std::string& guid, const char* reason) {
 // ---------------------------------------------------------------------------
 // DeliverGameEvent -- route IPC GAME_EVENT to the correct TcpSession
 // ---------------------------------------------------------------------------
+
+// Every player in an open zone shares one task force, so task-force kill credit
+// would reach the whole zone. There, only the bot's last damagers and their
+// teams get it. Elsewhere, or when no damager was recorded, nothing changes.
+static bool OpenZoneKillCreditAllowed(int64_t instance_id, const std::string& credited_guid,
+                                      const nlohmann::json& participants) {
+    if (!participants.is_array() || participants.empty()) return true;
+    const auto inst = InstanceRegistry::GetInstanceById(instance_id);
+    if (!inst) return true;
+    const auto map = MapGameInfo::LookupByName(inst->map_name);
+    if (!map || map->gameplay_type_value_id != MapGameInfo::kGameplayTypeOpenZone) return true;
+
+    for (const auto& p : participants) {
+        if (!p.is_string()) continue;
+        const std::string guid = p.get<std::string>();
+        if (guid == credited_guid) return true;
+        for (const auto& member : TeamService::GetTeamMemberGuids(guid)) {
+            if (member == credited_guid) return true;
+        }
+    }
+    return false;
+}
 
 void TcpSession::DeliverGameEvent(const std::string& session_guid, const nlohmann::json& j) {
     std::shared_ptr<TcpSession> session;
@@ -1052,15 +1079,41 @@ void TcpSession::DeliverGameEvent(const std::string& session_guid, const nlohman
         Logger::Log("ipc", "[TcpSession] DeliverGameEvent: quest char=%lld quest=%d abandon=%d\n",
             (long long)character_id, quest_id, (int)abandon);
 
+        // The map's TgSeqEvent_QuestUpdated fires only on what was decided here:
+        // output 0 on accept, 2 on turn-in.
+        auto fire_quest_kismet = [&](int output_link) {
+            nlohmann::json action;
+            action["type"]         = IpcProtocol::MSG_PLAYER_ACTION;
+            action["session_guid"] = session_guid;
+            action["action"]       = "quest_kismet";
+            action["args"]         = { {"quest_id", quest_id}, {"output_link", output_link} };
+            TcpSession::DeliverPlayerAction(session_guid, action);
+        };
+
+        QuestStore& quests = PlayerSessionStore::Quests();
         if (abandon) {
-            PlayerSessionStore::Quests().Abandon(character_id, quest_id);
+            quests.Abandon(character_id, quest_id);
             session->send_quest_abandon_response(quest_id);
         } else {
-            std::string status = PlayerSessionStore::Quests().GetStatus(character_id, quest_id);
-            if (status.empty()) {
-                PlayerSessionStore::Quests().Accept(character_id, quest_id);
+            const auto rule = Database::GetQuestRepeatRule(quest_id);
+            const std::string status = quests.GetStatus(character_id, quest_id);
+            const bool retake = status == "complete" &&
+                QuestStore::IsRepeatReady(quest_id,
+                    Database::GetQuestCompletedAt(character_id, quest_id), QuestStore::Now());
+
+            if (status == "complete" && !retake) {
+                Logger::Log("quest",
+                    "[TcpSession] quest %d already complete for char=%lld and not repeatable yet, ignored\n",
+                    quest_id, (long long)character_id);
+            } else if ((status.empty() || retake) && !rule.turnin_only) {
+                if (retake) quests.Restart(character_id, quest_id);
+                else        quests.Accept(character_id, quest_id);
                 session->send_quest_accept_response(quest_id);
-            } else if (status == "active") {
+                fire_quest_kismet(0);
+            } else {
+                // An active quest, or a "Turnin only" quest (never accepted)
+                // being handed in.
+                //
                 // Turn-in gate: every requirement must be satisfied. Collect
                 // requirements read component stock — the same source the
                 // client checks — so a player who already farmed the parts
@@ -1082,8 +1135,12 @@ void TcpSession::DeliverGameEvent(const std::string& session_guid, const nlohman
                     const auto depleted =
                         Database::ConsumeQuestRequirementItems(session->user_id_, quest_id);
 
-                    PlayerSessionStore::Quests().Complete(character_id, quest_id);
+                    // CompleteQuest updates an existing row; a "Turnin only"
+                    // quest has none until its first hand-in.
+                    if (rule.turnin_only) quests.Accept(character_id, quest_id);
+                    quests.Complete(character_id, quest_id);
                     session->send_quest_complete_response(quest_id);
+                    fire_quest_kismet(2);
 
                     if (pawn_id != 0) {
                         // Depleted stacks leave the client's map entirely (no
@@ -1109,9 +1166,6 @@ void TcpSession::DeliverGameEvent(const std::string& session_guid, const nlohman
                         session->sync_item_count(character_id);
                     }
                 }
-            } else {
-                // Already complete -- ignore
-                Logger::Log("ipc", "[TcpSession] DeliverGameEvent: quest already complete, ignored\n");
             }
         }
     }
@@ -1125,6 +1179,11 @@ void TcpSession::DeliverGameEvent(const std::string& session_guid, const nlohman
         if (character_id == 0 || bot_id <= 0) {
             Logger::Log("quest",
                 "[TcpSession] quest_kill_credit: bad payload char=%lld bot=%d — ignored\n",
+                (long long)character_id, bot_id);
+        } else if (!OpenZoneKillCreditAllowed(j.value("instance_id", (int64_t)0), session_guid,
+                                              j.value("participants", nlohmann::json::array()))) {
+            Logger::Log("quest",
+                "[TcpSession] quest_kill_credit char=%lld bot=%d: open zone, not a damager or on a damager's team — skipped\n",
                 (long long)character_id, bot_id);
         } else {
             const auto moved = Database::CreditKillQuestRequirements(character_id, bot_id);
@@ -1993,6 +2052,52 @@ void TcpSession::travel_to_map_when_ready(const std::string& map_name, int task_
     });
 }
 
+void TcpSession::start_tutorial(uint32_t training_map_game_id) {
+    tutorial_map_game_id_ = training_map_game_id;
+    if (!s_tutorial_spawner_) {
+        Logger::Log("tutorial", "[TcpSession] No tutorial spawner registered — %s goes home\n",
+            session_guid_.c_str());
+        wait_for_home_map_then_register(120);
+        return;
+    }
+    const int64_t instance_id =
+        s_tutorial_spawner_(kTutorialMapName, kTutorialGameMode, kTutorialDifficultyValueId);
+    if (instance_id == 0) {
+        Logger::Log("tutorial", "[TcpSession] Tutorial spawn failed — %s goes home\n",
+            session_guid_.c_str());
+        wait_for_home_map_then_register(120);
+        return;
+    }
+    Logger::Log("tutorial", "[TcpSession] Tutorial for %s: '%s' instance=%lld (client map_game_id=%u)\n",
+        session_guid_.c_str(), kTutorialMapName, (long long)instance_id, training_map_game_id);
+    travel_to_instance_when_ready(instance_id, kTutorialTaskForce, 120);
+}
+
+// Like travel_to_map_when_ready, but for one specific instance, so a private
+// tutorial is never shared with another new player.
+void TcpSession::travel_to_instance_when_ready(int64_t instance_id, int task_force,
+                                               int remaining_seconds) {
+    const auto inst = InstanceRegistry::GetInstanceById(instance_id);
+    if (remaining_seconds <= 0 || !inst || inst->state == "STOPPED") {
+        Logger::Log("tutorial", "[TcpSession] Instance %lld not ready for %s (%s) — going home\n",
+            (long long)instance_id, session_guid_.c_str(),
+            !inst ? "missing" : (remaining_seconds <= 0 ? "timed out" : "stopped"));
+        wait_for_home_map_then_register(120);
+        return;
+    }
+    if (inst->state == "READY") {
+        initiate_player_register_for_target(*inst, task_force);
+        return;
+    }
+
+    auto self(shared_from_this());
+    auto timer = std::make_shared<asio::steady_timer>(io_ctx_);
+    timer->expires_after(std::chrono::seconds(2));
+    timer->async_wait([this, self, timer, instance_id, task_force, remaining_seconds](std::error_code ec) {
+        if (!ec) travel_to_instance_when_ready(instance_id, task_force, remaining_seconds - 2);
+    });
+}
+
 void TcpSession::handle_packet(const uint8_t* data, size_t length) {
 	if (length < 6) {
 		Logger::Log("tcp", "[%s] Packet too short\n", Logger::GetTime());
@@ -2528,8 +2633,28 @@ void TcpSession::handle_packet(const uint8_t* data, size_t length) {
 			// The client sends no SKIN/EYE_MATERIAL_PARAMETER_ID — skin tone is
 			// carried inside the morph blob, so those two columns stay 0.
 			PacketView pkt(data + 6, length - 6);
-			// uint32_t trainingMapGameId  = pkt.Read4B(GA_T::TRAINING_MAP_GAME_ID).value_or(0);  // unused: both paths now use initiate_player_register_and_go_play
-			pkt.Read4B(GA_T::TRAINING_MAP_GAME_ID);  // consume but ignore
+			// Non-zero when the player picked Play at the introduction-missions prompt.
+			const uint32_t trainingMapGameId = pkt.Read4B(GA_T::TRAINING_MAP_GAME_ID).value_or(0);
+			{
+				// Capture for the tutorial work: which map the client asks for, and
+				// what Play vs Skip changes. -1 = field absent.
+				auto v4 = [&](uint16_t t) { auto v = pkt.Read4B(t); return v ? (long long)*v : -1LL; };
+				const auto trainingFlag = pkt.ReadWideString(GA_T::TRAINING_FLAG);
+				std::string hex;
+				char b[4];
+				for (size_t i = 0; i < length; i++) { snprintf(b, sizeof(b), "%02X ", (unsigned)data[i]); hex += b; }
+				std::string flagText = "<absent>";
+				if (trainingFlag) {
+					flagText.clear();
+					for (wchar_t wc : *trainingFlag) flagText += (wc < 0x80) ? (char)wc : '?';
+				}
+				Logger::Log("tutorial",
+					"[TCP] ADD_PLAYER_CHARACTER training_map_game_id=%lld tutorial_map_game_id=%lld "
+					"training_count=%lld training_flag='%s' profile_id=%lld guid=%s\n  raw(%zu): %s\n",
+					v4(GA_T::TRAINING_MAP_GAME_ID), v4(GA_T::TUTORIAL_MAP_GAME_ID),
+					v4(GA_T::TRAINING_COUNT), flagText.c_str(),
+					v4(GA_T::PROFILE_ID), session_guid_.c_str(), length, hex.c_str());
+			}
 			uint32_t profileId          = pkt.Read4B(GA_T::PROFILE_ID).value_or(GA_G::PROFILE_ID_ASSAULT);
 			uint32_t headAsmId          = pkt.Read4B(GA_T::HEAD_ASM_ID).value_or(1605);
 			uint32_t genderTypeId       = pkt.Read4B(GA_T::GENDER_TYPE_VALUE_ID).value_or(853);
@@ -2581,8 +2706,11 @@ void TcpSession::handle_packet(const uint8_t* data, size_t length) {
 			// already set from InsertCharacter above, so the response auto-
 			// targets the freshly-created character.
 			send_select_character_response();
-			// Both tutorial and normal paths use wait-for-READY then PLAYER_REGISTER flow.
-			wait_for_home_map_then_register(120);  // 120 second timeout
+			if (trainingMapGameId != 0) {
+				start_tutorial(trainingMapGameId);
+			} else {
+				wait_for_home_map_then_register(120);  // 120 second timeout
+			}
 			break;
 		}
 		case GA_U::DELETE_CHARACTER: {
@@ -4460,9 +4588,17 @@ void TcpSession::send_quest_state_sync() {
 		return;
 	}
 
-	int completed = 0, active = 0;
+	int completed = 0, active = 0, reoffered = 0;
+	const int64_t now = QuestStore::Now();
 
 	for (const auto& s : states) {
+		// Left out of the completed map so the giver offers it again; taking it
+		// restarts the row (see the "quest" game event).
+		if (s.status == "complete" && QuestStore::IsRepeatReady(s.quest_id, s.completed_at, now)) {
+			reoffered++;
+			continue;
+		}
+
 		std::vector<uint8_t> response;
 		append(response, GA_U::QUEST_UPDATE & 0xFF, GA_U::QUEST_UPDATE >> 8);
 		append(response, 0x01, 0x00);  // 1 top-level item: DATA_SET_QUESTS
@@ -4513,8 +4649,8 @@ void TcpSession::send_quest_state_sync() {
 	}
 
 	Logger::Log("quest",
-		"[TCP] quest state sync: char=%lld replayed %d completed + %d active quest(s)\n",
-		(long long)selected_character_id_, completed, active);
+		"[TCP] quest state sync: char=%lld replayed %d completed + %d active quest(s), %d repeatable(s) offered again\n",
+		(long long)selected_character_id_, completed, active, reoffered);
 }
 
 // Per-requirement progress update. Shape taken from the client's QUEST_UPDATE
@@ -6188,6 +6324,10 @@ void TcpSession::send_go_play_to_instance(const InstanceInfo& target, int task_f
 		friendly_name_msg_id          = info->friendly_name_msg_id;
 		map_game_id                   = info->map_game_id;
 		entry_background_image_res_id = info->entry_background_image_res_id;
+	} else if (tutorial_map_game_id_ != 0 && target.map_name == kTutorialMapName) {
+		map_game_id = tutorial_map_game_id_;   // the id the client asked for at character creation
+		Logger::Log("tutorial", "[TcpSession] send_go_play_to_instance: '%s' has no map_game_info row; "
+			"using the client's map_game_id=%u\n", target.map_name.c_str(), map_game_id);
 	} else {
 		Logger::Log("tcp", "[TcpSession] send_go_play_to_instance: no map_game_info row "
 			"for map_name='%s'; falling back to HQ defaults\n", target.map_name.c_str());
