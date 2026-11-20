@@ -2156,6 +2156,19 @@ void __fastcall UObject__ProcessEvent::Call(UObject* Object, void* edx, UFunctio
 			Logger::Log("kismet", "[%s] kismet op activated: %s\n",
 				Logger::GetTime(), opName.c_str());
 		}
+		// TgSeqAct_EquipCharDevices has no effect on this server yet; log what
+		// the map asks for (the tutorial's per-class gear) so it can be built.
+		if (Logger::IsChannelEnabled("kismet")
+		 && ObjectClassCache::ClassNameContains(Object, "TgSeqAct_EquipCharDevices")) {
+			UTgSeqAct_EquipCharDevices* Act = (UTgSeqAct_EquipCharDevices*)Object;
+			std::string ids;
+			for (int i = 0; i < Act->m_DeviceIdList.Num(); i++) {
+				if (!ids.empty()) ids += ",";
+				ids += std::to_string(Act->m_DeviceIdList.Data[i]);
+			}
+			Logger::Log("kismet", "TgSeqAct_EquipCharDevices: devices=[%s] removeOthers=%d targets=%d\n",
+				ids.c_str(), (int)Act->m_bRemoveOtherDevices, Act->Targets.Num());
+		}
 		// TgSeqAct_AlarmBots: the original server's native Activated() raised
 		// the global alarm; this binary lacks it, and the base SequenceAction
 		// handler-dispatch does nothing when Target is empty (typical wiring).
