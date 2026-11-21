@@ -281,6 +281,14 @@ ParseResult TryParseChatCommand(const std::string& message_text) {
         return out;
     }
 
+    if (cmd_name == "-restoregear") {
+        // No args — the DLL swaps the saved loadout back in.
+        out.recognized = true;
+        out.suppress_broadcast = true;
+        if (rest.empty()) out.restore_gear = true;
+        return out;
+    }
+
     if (cmd_name == "-classes") {
         // No args — per-team class counts of the sender's instance.
         out.recognized = true;
@@ -907,6 +915,7 @@ void DispatchPossess(const std::string& session_guid)   { DispatchSimpleAction("
 void DispatchUnpossess(const std::string& session_guid) { DispatchSimpleAction("unpossess", session_guid); }
 void DispatchCoords(const std::string& session_guid)    { DispatchSimpleAction("coords",    session_guid); }
 void DispatchFullHeal(const std::string& session_guid)  { DispatchSimpleAction("fullheal",  session_guid); }
+void DispatchRestoreGear(const std::string& session_guid) { DispatchSimpleAction("restore_gear", session_guid); }
 
 void DispatchToggleBrokenSuits(const ToggleBrokenSuitsArgs& args,
                                const std::string& session_guid) {

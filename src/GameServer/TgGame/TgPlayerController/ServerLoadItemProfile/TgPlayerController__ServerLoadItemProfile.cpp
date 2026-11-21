@@ -8,6 +8,7 @@
 #include "src/GameServer/Storage/PlayerRegistry/PlayerRegistry.hpp"
 #include "src/GameServer/TgGame/TgPawn_Character/ReapplyCharacterSkillTree/TgPawn_Character__ReapplyCharacterSkillTree.hpp"
 #include "src/GameServer/TgGame/TgPawn/KillDeployables/TgPawn__KillDeployables.hpp"
+#include "src/GameServer/Tutorial/TutorialGear.hpp"
 #include "src/Database/Database.hpp"
 #include "src/IpcClient/IpcClient.hpp"
 #include "src/Shared/IpcProtocol.hpp"
@@ -110,6 +111,9 @@ void __fastcall TgPlayerController__ServerLoadItemProfile::Call(
         oldProfile, nId, (long long)character_id, guid.c_str());
 
     sqlite3* db = Database::GetConnection();
+
+    // The teardown below also removes any tutorial devices; stop the tutorial swap.
+    TutorialGear::Release((ATgPawn*)Pawn, guid);
 
     // Destroy all personal deployables on profile switch — turrets, drones,
     // stations etc. placed under the old loadout should not persist.

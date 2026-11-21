@@ -22,6 +22,7 @@
 #include "src/Utils/CommandLineParser/CommandLineParser.hpp"
 #include "src/GameServer/Globals.hpp"
 #include "src/Database/Database.hpp"
+#include "src/GameServer/Tutorial/TutorialGear.hpp"
 #include "src/Utils/Logger/Logger.hpp"
 
 bool TgGame__SpawnPlayerCharacter::bEnemyGearSpawned = true;  // now handled in SpawnBotById
@@ -997,6 +998,8 @@ ATgPawn_Character* __fastcall TgGame__SpawnPlayerCharacter::Call(ATgGame* Game, 
 			"SpawnPlayerCharacter: bound newpawn=%p to session=%s; calling ReapplyCharacterSkillTree\n",
 			newpawn, session_guid.c_str());
 		newpawn->ReapplyCharacterSkillTree();
+		// Respawn mid-tutorial: the DB loadout just went on; swap the tutorial gear back.
+		TutorialGear::OnPlayerSpawned((ATgPawn*)newpawn, session_guid);
 	}
 
 	// Possess now — everything the UC-side Possess / PossessedBy chain might

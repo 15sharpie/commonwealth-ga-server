@@ -232,6 +232,10 @@ struct ParseResult {
     // practice; DLL enforces map gate + per-player cooldown). No args.
     bool fullheal = false;
 
+    // -restoregear — put the player's saved loadout back on after a tutorial
+    // map swapped it for tutorial devices (DLL TutorialGear). No args.
+    bool restore_gear = false;
+
     // -classes — per-team class counts (assault/medic/recon/robotics) of the
     // sender's current instance, replied privately on the System channel.
     // Handled entirely on the control server. No args.
@@ -320,6 +324,9 @@ void DispatchCoords(const std::string& session_guid);
 // Send -fullheal to the game DLL. Same delivery path; map gate + cooldown
 // are enforced DLL-side.
 void DispatchFullHeal(const std::string& session_guid);
+
+// Send -restoregear to the game DLL. Same delivery path.
+void DispatchRestoreGear(const std::string& session_guid);
 
 // -classes: count classes per team in the sender's instance (from
 // ga_instance_players — same data Local chat scoping uses) and reply with two

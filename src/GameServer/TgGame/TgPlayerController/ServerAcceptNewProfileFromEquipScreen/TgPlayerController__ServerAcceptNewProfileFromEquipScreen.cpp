@@ -5,6 +5,7 @@
 #include "src/GameServer/Inventory/Inventory.hpp"
 #include "src/GameServer/Cosmetics/CosmeticEquip.hpp"
 #include "src/GameServer/TgGame/TgPawn/KillDeployables/TgPawn__KillDeployables.hpp"
+#include "src/GameServer/Tutorial/TutorialGear.hpp"
 #include "src/Database/Database.hpp"
 #include "src/IpcClient/IpcClient.hpp"
 #include "src/Shared/IpcProtocol.hpp"
@@ -98,6 +99,13 @@ void __fastcall TgPlayerController__ServerAcceptNewProfileFromEquipScreen::Call(
 		Logger::Log(GetLogChannel(),
 			"equip-save: no GPawnSessions entry for pawn=%p — dropped\n",
 			(void*)Pawn);
+		LogCallEnd();
+		return;
+	}
+
+	// Tutorial gear on: the pawn isn't wearing the saved loadout, so nothing is saved.
+	if (TutorialGear::IsActive(it->second)) {
+		TutorialGear::RefuseEquipSave(Pawn, it->second);
 		LogCallEnd();
 		return;
 	}

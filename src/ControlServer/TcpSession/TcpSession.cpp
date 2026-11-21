@@ -783,6 +783,22 @@ void TcpSession::DeliverGameEvent(const std::string& session_guid, const nlohman
         if (pawn_id != 0) session->last_pawn_id_ = pawn_id;
         session->item_profile_id_ = j.value("item_profile_id", 0);
         const int64_t character_id = session->selected_character_id_;
+        // Tutorial gear belongs to the instance that set it; anywhere else the
+        // pawn wears the saved loadout again.
+        if (session->tutorial_gear_active_
+         && j.value("instance_id", (int64_t)0) != session->tutorial_gear_instance_id_) {
+            if (pawn_id != 0) {
+                for (const auto& t : session->tutorial_devices_) {
+                    session->send_beacon_remove_response(pawn_id, t.inventory_id);
+                }
+            }
+            Logger::Log("tutorial", "[TcpSession] tutorial_gear guid=%s dropped: spawned on another instance\n",
+                session_guid.c_str());
+            session->tutorial_gear_active_      = false;
+            session->tutorial_gear_instance_id_ = 0;
+            session->tutorial_devices_.clear();
+            session->tutorial_strip_slots_.clear();
+        }
         Logger::Log("ipc", "[TcpSession] DeliverGameEvent: spawn pawn_id=%d item_profile_id=%d char=%lld guid=%s\n",
             pawn_id, (int)session->item_profile_id_, (long long)character_id, session_guid.c_str());
         if (pawn_id != 0 && character_id != 0) {
@@ -822,6 +838,47 @@ void TcpSession::DeliverGameEvent(const std::string& session_guid, const nlohman
         Logger::Log("ipc", "[TcpSession] DeliverGameEvent: beacon_remove pawn=%d inv=%d\n",
             pawn_id, inventory_id);
         session->send_beacon_remove_response(pawn_id, inventory_id);
+    }
+    else if (subtype == "tutorial_gear") {
+        // The DLL swapped the saved loadout for tutorial devices (or back).
+        // Nothing is persisted; only the client's inventory view follows.
+        const int pawn_id = j.value("pawn_id", 0);
+        const int64_t character_id = session->selected_character_id_;
+        session->tutorial_gear_active_      = j.value("active", false);
+        session->tutorial_gear_instance_id_ = j.value("instance_id", (int64_t)0);
+        session->tutorial_devices_.clear();
+        session->tutorial_strip_slots_.clear();
+        if (session->tutorial_gear_active_) {
+            if (j.contains("devices") && j["devices"].is_array()) {
+                for (const auto& d : j["devices"]) {
+                    session->tutorial_devices_.push_back(TcpSession::TutorialDevice{
+                        d.value("slot", 0), d.value("device_id", 0), d.value("inventory_id", 0)});
+                }
+            }
+            if (j.contains("strip_slots") && j["strip_slots"].is_array()) {
+                for (const auto& s : j["strip_slots"]) {
+                    if (s.is_number_integer()) session->tutorial_strip_slots_.push_back(s.get<int>());
+                }
+            }
+        }
+        int removed = 0;
+        if (pawn_id != 0) {
+            if (j.contains("removed_inventory_ids") && j["removed_inventory_ids"].is_array()) {
+                for (const auto& id : j["removed_inventory_ids"]) {
+                    if (!id.is_number_integer()) continue;
+                    session->send_beacon_remove_response(pawn_id, id.get<int>());
+                    ++removed;
+                }
+            }
+            if (character_id != 0) {
+                session->send_inventory_clear(pawn_id, character_id);
+                session->send_inventory_response(pawn_id, character_id);
+            }
+        }
+        Logger::Log("tutorial",
+            "[TcpSession] tutorial_gear guid=%s active=%d devices=%zu removed=%d instance=%lld\n",
+            session_guid.c_str(), (int)session->tutorial_gear_active_,
+            session->tutorial_devices_.size(), removed, (long long)session->tutorial_gear_instance_id_);
     }
     else if (subtype == "possess_show_loadout") {
         int pawn_id = j.value("pawn_id", 0);
@@ -3778,6 +3835,26 @@ void TcpSession::send_inventory_response(int nPawnId, int64_t character_id) {
 	auto devices = PlayerSessionStore::GetDevicesForCharacter(
 		character_id, (int)item_profile_id_);
 
+	// Tutorial gear: saved devices in the stripped slots are off the pawn, so
+	// they ship as bag items (DEVICE_ID 0, no resubmit); the tutorial devices
+	// ship as the equipped ones.
+	if (tutorial_gear_active_) {
+		std::set<int> off(tutorial_strip_slots_.begin(), tutorial_strip_slots_.end());
+		for (const auto& t : tutorial_devices_) off.insert(t.slot);
+		devices.erase(std::remove_if(devices.begin(), devices.end(), [&off](const DeviceRow& d) {
+			return d.item_id == 0 && d.device_id > 0 && off.count(d.equip_slot) != 0;
+		}), devices.end());
+		for (const auto& t : tutorial_devices_) {
+			DeviceRow row{};
+			row.device_id     = t.device_id;
+			row.equip_slot    = t.slot;
+			row.slot_value_id = GA::SlotValueId(t.slot);
+			row.quality       = 1162;
+			row.inventory_id  = t.inventory_id;
+			devices.push_back(row);
+		}
+	}
+
 	// Ships TWO blocks of records over SEND_INVENTORY (0x0182):
 	//   1. Currently-equipped devices for `character_id`, with
 	//      LOCATION_VALUE_ID=369 (EQUIPPED), DEVICE_ID=<inv_id> (= the
@@ -4326,9 +4403,11 @@ void TcpSession::sync_item_count(int64_t character_id) {
 		return;
 	}
 
-	const int total = Database::GetExpectedItemCount(charInfo->user_id,
-	                                                 (int)charInfo->profile_id);
+	int total = Database::GetExpectedItemCount(charInfo->user_id,
+	                                           (int)charInfo->profile_id);
 	if (total <= 0) return;
+	// Tutorial devices are extra client inventory records (see send_inventory_response).
+	if (tutorial_gear_active_) total += (int)tutorial_devices_.size();
 
 	nlohmann::json msg;
 	msg["type"]         = IpcProtocol::MSG_PLAYER_ACTION;

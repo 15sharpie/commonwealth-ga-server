@@ -29,6 +29,7 @@
 #include "src/Utils/CommandLineParser/CommandLineParser.hpp"
 #include "src/GameServer/IpDrv/NetConnection/Cleanup/NetConnection__Cleanup.hpp"
 #include "src/GameServer/Stats/MatchStats.hpp"
+#include "src/GameServer/Tutorial/TutorialGear.hpp"
 #include "src/GameServer/Globals.hpp"
 #include "src/Config/Config.hpp"
 
@@ -707,6 +708,8 @@ void IpcClient::DrainInbound() {
                 TgPlayerActions::CoordsCmd::Execute(guid);
             } else if (action == "fullheal") {
                 TgPlayerActions::FullHealCmd::Execute(guid);
+            } else if (action == "restore_gear") {
+                TutorialGear::RestoreFromCommand(guid);
             } else if (action == "set_item_count") {
                 // Keeps ATgInventoryManager::r_ItemCount level with the client's
                 // inventory map after the control server adds component rows.

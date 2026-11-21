@@ -178,6 +178,7 @@ SOURCE_FILES= \
 			  $(SRC_DIR)/GameServer/TgGame/TgInventoryManager/NonPersistAddDevice/TgInventoryManager__NonPersistAddDevice.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgInventoryManager/NonPersistRemoveDevice/TgInventoryManager__NonPersistRemoveDevice.cpp \
 			  $(SRC_DIR)/GameServer/Inventory/Inventory.cpp \
+			  $(SRC_DIR)/GameServer/Tutorial/TutorialGear.cpp \
 			  $(SRC_DIR)/GameServer/Cosmetics/BrokenSuitSwap.cpp \
 			  $(SRC_DIR)/GameServer/Cosmetics/CosmeticEquip.cpp \
 			  $(SRC_DIR)/GameServer/Cosmetics/JetpackReload.cpp \

@@ -191,6 +191,16 @@ private:
     int32_t  item_profile_id_       = 0;
     uint64_t profile_refresh_token_ = 0;
 
+    // Tutorial gear (DLL TutorialGear, "tutorial_gear" event): while active,
+    // SEND_INVENTORY ships the saved devices in tutorial_strip_slots_ as bag
+    // items and the tutorial devices as equipped. Scoped to the instance that
+    // set it; a spawn on any other instance drops it.
+    struct TutorialDevice { int slot; int device_id; int inventory_id; };
+    bool                        tutorial_gear_active_      = false;
+    int64_t                     tutorial_gear_instance_id_ = 0;
+    std::vector<TutorialDevice> tutorial_devices_;
+    std::vector<int>            tutorial_strip_slots_;
+
 	uint32_t current_match_queue_id_ = 0;
 
     // Set when a MATCH_INVITATION is delivered — the instance to join on MATCH_ACCEPT.
