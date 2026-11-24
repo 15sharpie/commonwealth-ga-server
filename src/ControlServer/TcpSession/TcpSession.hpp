@@ -691,6 +691,11 @@ private:
     // player there once it is READY. Falls back to the home map on any failure.
     void start_tutorial(uint32_t training_map_game_id);
     void travel_to_instance_when_ready(int64_t instance_id, int task_force, int remaining_seconds);
+    // TgSeqAct_RequestMission (intro mission chain): open zones go through
+    // OpenWorldTravel, missions get a private instance like the tutorial, and an
+    // unknown map_game_id sends the player home.
+    void request_mission(uint32_t map_game_id);
+    bool mission_request_in_flight_ = false;
     // The id the client sent for the tutorial map; used on GSC_GO_PLAY while
     // map_game_info has no row for it.
     uint32_t tutorial_map_game_id_ = 0;

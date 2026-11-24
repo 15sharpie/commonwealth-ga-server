@@ -8,6 +8,7 @@
 #include "src/ControlServer/Constants/DeviceIds.hpp"
 #include "src/ControlServer/Loadouts/ArmorLoadouts.hpp"
 #include "src/ControlServer/MapGameInfo/MapGameInfo.hpp"
+#include "src/ControlServer/OpenWorldTravel/OpenWorldTravel.hpp"
 #include "src/ControlServer/MatchmakingService/TicketInfoEncoder.hpp"
 #include "src/ControlServer/TeamService/TeamService.hpp"
 #include "src/ControlServer/MatchmakingService/RuntimeStats.hpp"
@@ -783,6 +784,7 @@ void TcpSession::DeliverGameEvent(const std::string& session_guid, const nlohman
         if (pawn_id != 0) session->last_pawn_id_ = pawn_id;
         session->item_profile_id_ = j.value("item_profile_id", 0);
         const int64_t character_id = session->selected_character_id_;
+        session->mission_request_in_flight_ = false;  // arrived; the next RequestMission may travel
         // Tutorial gear belongs to the instance that set it; anywhere else the
         // pawn wears the saved loadout again.
         if (session->tutorial_gear_active_
@@ -838,6 +840,12 @@ void TcpSession::DeliverGameEvent(const std::string& session_guid, const nlohman
         Logger::Log("ipc", "[TcpSession] DeliverGameEvent: beacon_remove pawn=%d inv=%d\n",
             pawn_id, inventory_id);
         session->send_beacon_remove_response(pawn_id, inventory_id);
+    }
+    else if (subtype == "request_mission") {
+        const uint32_t map_game_id = j.value("map_game_id", 0u);
+        Logger::Log("tutorial", "[TcpSession] DeliverGameEvent: request_mission map_game_id=%u guid=%s\n",
+            map_game_id, session_guid.c_str());
+        if (map_game_id != 0) session->request_mission(map_game_id);
     }
     else if (subtype == "tutorial_gear") {
         // The DLL swapped the saved loadout for tutorial devices (or back).
@@ -2127,6 +2135,42 @@ void TcpSession::start_tutorial(uint32_t training_map_game_id) {
     }
     Logger::Log("tutorial", "[TcpSession] Tutorial for %s: '%s' instance=%lld (client map_game_id=%u)\n",
         session_guid_.c_str(), kTutorialMapName, (long long)instance_id, training_map_game_id);
+    travel_to_instance_when_ready(instance_id, kTutorialTaskForce, 120);
+}
+
+void TcpSession::request_mission(uint32_t map_game_id) {
+    const auto row = MapGameInfo::LookupByMapGameId(map_game_id);
+    if (row && row->gameplay_type_value_id == MapGameInfo::kGameplayTypeOpenZone) {
+        Logger::Log("tutorial", "[TcpSession] RequestMission %u ('%s') for %s: open zone travel\n",
+            map_game_id, row->map_name.c_str(), session_guid_.c_str());
+        OpenWorldTravel::Request(session_guid_, map_game_id);
+        return;
+    }
+    if (mission_request_in_flight_) {
+        Logger::Log("tutorial", "[TcpSession] RequestMission %u for %s: already travelling — ignored\n",
+            map_game_id, session_guid_.c_str());
+        return;
+    }
+    if (!row || row->map_name.empty() || row->game_class.empty() || !s_tutorial_spawner_) {
+        Logger::Log("tutorial", "[TcpSession] RequestMission %u for %s: no destination (%s) — going home\n",
+            map_game_id, session_guid_.c_str(),
+            !row ? "no map_game_info row" : (!s_tutorial_spawner_ ? "no spawner" : "incomplete row"));
+        mission_request_in_flight_ = true;
+        wait_for_home_map_then_register(120);
+        return;
+    }
+    const int64_t instance_id =
+        s_tutorial_spawner_(row->map_name, row->game_class, kTutorialDifficultyValueId);
+    if (instance_id == 0) {
+        Logger::Log("tutorial", "[TcpSession] RequestMission %u ('%s') for %s: spawn failed — going home\n",
+            map_game_id, row->map_name.c_str(), session_guid_.c_str());
+        mission_request_in_flight_ = true;
+        wait_for_home_map_then_register(120);
+        return;
+    }
+    Logger::Log("tutorial", "[TcpSession] RequestMission %u for %s: '%s' instance=%lld\n",
+        map_game_id, session_guid_.c_str(), row->map_name.c_str(), (long long)instance_id);
+    mission_request_in_flight_ = true;
     travel_to_instance_when_ready(instance_id, kTutorialTaskForce, 120);
 }
 

@@ -20,6 +20,7 @@
 #include "src/GameServer/Storage/TeamsData/TeamsData.hpp"
 #include "src/GameServer/GameModes/SuperAgent/SuperAgent.hpp"
 #include "src/GameServer/Tutorial/TutorialGear.hpp"
+#include "src/GameServer/Tutorial/TutorialMission.hpp"
 #include "src/Config/Config.hpp"
 #include "src/GameServer/Globals.hpp"
 #include "src/Utils/Logger/Logger.hpp"
@@ -2171,6 +2172,52 @@ void __fastcall UObject__ProcessEvent::Call(UObject* Object, void* edx, UFunctio
 					ids.c_str(), (int)Act->m_bRemoveOtherDevices, Act->Targets.Num());
 			}
 			TutorialGear::OnEquipCharDevicesActivated(Act);
+		}
+		// TgSeqAct_RequestMission: the intro missions' hand-off to the next
+		// mission; the control server does the travel.
+		if (ObjectClassCache::ClassNameContains(Object, "TgSeqAct_RequestMission")) {
+			TutorialMission::OnRequestMissionActivated((UTgSeqAct_RequestMission*)Object);
+		}
+		// SeqAct_ToggleHidden: the tutorial cutscene props (map-baked
+		// SkeletalMeshActors, bNoDelete) never appeared for players. Promote each
+		// target the way Actor.ForceNetRelevant does so bHidden replicates, then
+		// re-assert the Hide (0) / UnHide (1) pin. Toggle (2) is left to the handler.
+		if (ObjectClassCache::ClassNameContains(Object, "SeqAct_ToggleHidden")) {
+			USequenceOp* Op = (USequenceOp*)Object;
+			const bool hide   = Op->InputLinks.Count > 0 && Op->InputLinks.Data[0].bHasImpulse;
+			const bool unhide = Op->InputLinks.Count > 1 && Op->InputLinks.Data[1].bHasImpulse;
+			for (int li = 0; li < Op->VariableLinks.Count; li++) {
+				TArray<USequenceVariable*>& vars = Op->VariableLinks.Data[li].LinkedVariables;
+				for (int vi = 0; vi < vars.Count; vi++) {
+					USequenceVariable* var = vars.Data[vi];
+					if (!var || !ObjectClassCache::ClassNameContains(var, "SeqVar_Object")) continue;
+					UObject* held = ((USeqVar_Object*)var)->ObjValue;
+					if (!held) continue;
+					bool isActor = false;
+					for (UClass* c = held->Class; c; c = (UClass*)((UField*)c)->SuperField) {
+						if (ObjectClassCache::GetClassName(c) == "Class Engine.Actor") { isActor = true; break; }
+					}
+					if (!isActor) continue;
+					AActor* a = (AActor*)held;
+					const int roleBefore = a->RemoteRole;
+					if (a->RemoteRole == 0 && a->bNoDelete && !a->bStatic && !a->bClientSideOnly) {
+						a->RemoteRole = 1;  // ROLE_SimulatedProxy
+						a->bAlwaysRelevant = 1;
+						a->NetUpdateFrequency = 0.1f;
+					}
+					if (hide)        a->SetHidden(1);
+					else if (unhide) a->SetHidden(0);
+					a->bNetDirty = 1;
+					a->bForceNetUpdate = 1;
+					if (Logger::IsChannelEnabled("kismet")) {
+						const std::string& cls = ObjectClassCache::GetClassName(a);
+						Logger::Log("kismet",
+							"  ToggleHidden target %s hide=%d unhide=%d bHidden=%d role %d->%d noDelete=%d static=%d\n",
+							cls.c_str(), (int)hide, (int)unhide, (int)a->bHidden, roleBefore,
+							(int)a->RemoteRole, (int)a->bNoDelete, (int)a->bStatic);
+					}
+				}
+			}
 		}
 		// TgSeqAct_AlarmBots: the original server's native Activated() raised
 		// the global alarm; this binary lacks it, and the base SequenceAction
