@@ -982,17 +982,24 @@ private:
         std::int64_t character_id = 0;
         std::string  name;
         bool         joined = false;
+        bool         spectator = false;
+        std::uint64_t register_token = 0;
+        // Set when the master removes him; logged as the reason on his "player left" line.
+        const char*  leave_reason = nullptr;
     };
 
     // master -> instance: remember who PLAYER_REGISTER puts on the instance, and
     // stop tracking a player the master removes with PLAYER_LEAVE (the DLL does not
     // always answer with PLAYER_LEFT, e.g. when it never finished joining).
+    // PLAYER_LEAVE and PLAYER_CLOSE both set the reason his "player left" line shows.
     void NoteMasterFrames(std::int64_t instance_id, const std::string& frames) {
         const bool has_register =
             frames.find(IpcProtocol::MSG_PLAYER_REGISTER) != std::string::npos;
         const bool has_leave =
             frames.find(IpcProtocol::MSG_PLAYER_LEAVE) != std::string::npos;
-        if (!has_register && !has_leave) return;
+        const bool has_close =
+            frames.find(IpcProtocol::MSG_PLAYER_CLOSE) != std::string::npos;
+        if (!has_register && !has_leave && !has_close) return;
         ForEachIpcMessage(frames, [&](const std::string& body) {
             auto j = nlohmann::json::parse(body, nullptr, false, true);
             if (j.is_discarded() || !j.is_object()) return;
@@ -1005,15 +1012,42 @@ private:
                 e.user_id      = j.value("user_id", (std::int64_t)0);
                 e.character_id = j.value("character_id", (std::int64_t)0);
                 e.name         = j.value("player_name", std::string());
+                e.spectator    = j.value("is_spectator", false);
+                e.register_token = j.value("register_token", (std::uint64_t)0);
+                e.leave_reason = nullptr;
                 return;
             }
 
-            if (type != IpcProtocol::MSG_PLAYER_LEAVE) return;
+            const bool is_leave = (type == IpcProtocol::MSG_PLAYER_LEAVE);
+            const bool is_close = (type == IpcProtocol::MSG_PLAYER_CLOSE);
+            if (!is_leave && !is_close) return;
+            auto it = roster_.find({instance_id, guid});
+            if (it == roster_.end()) {
+                // He already left, or was never registered through this node.
+                if (is_close) {
+                    Logger::Log("node", "master closed guid=%s on instance=%lld (not on this node's roster)\n",
+                        guid.c_str(), (long long)instance_id);
+                }
+                return;
+            }
+
+            // PLAYER_LEAVE = Disconnect button. PLAYER_CLOSE = the master's connection
+            // to his game ended, or he stopped spectating.
+            RosterEntry& e = it->second;
+            const std::uint64_t token = j.value("register_token", (std::uint64_t)0);
+            // Same stale-token skip as the DLL's PLAYER_CLOSE handler.
+            if (is_close && token != 0 && token != e.register_token) return;
+            if (!e.leave_reason) {   // first removal wins
+                e.leave_reason = is_leave ? "disconnect"
+                               : (e.spectator ? "spectate_ended" : "connection_closed");
+                if (!e.joined && e.user_id > 0) {
+                    // He never finished joining, so no PLAYER_LEFT line will name him.
+                    LogPlayer("left", instance_id, e, e.leave_reason);
+                }
+            }
             // Keep the roster entry: the instance still answers with PLAYER_LEFT, and
             // that is what emits the "player left" console line panels read.
-            auto it = roster_.find({instance_id, guid});
-            if (it == roster_.end()) return;
-            if (it->second.character_id != 0) DropPlayer(instance_id, it->second.character_id);
+            if (is_leave && e.character_id != 0) DropPlayer(instance_id, e.character_id);
         });
     }
 
@@ -1053,7 +1087,7 @@ private:
             }
             if (e.joined) {
                 if (e.user_id > 0) {
-                    LogPlayer("left", instance_id, e, "left");
+                    LogPlayer("left", instance_id, e, e.leave_reason ? e.leave_reason : "left");
                 } else {
                     Logger::Log("node", "player left instance=%lld guid=%s (not registered through this node)\n",
                         (long long)instance_id, guid.c_str());
@@ -1072,7 +1106,8 @@ private:
         auto it = roster_.lower_bound({instance_id, std::string()});
         while (it != roster_.end() && it->first.first == instance_id) {
             if (it->second.joined && it->second.user_id > 0) {
-                LogPlayer("left", instance_id, it->second, "instance_ended");
+                LogPlayer("left", instance_id, it->second,
+                          it->second.leave_reason ? it->second.leave_reason : "instance_ended");
             }
             it = roster_.erase(it);
         }
